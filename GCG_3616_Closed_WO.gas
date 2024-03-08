@@ -1,0 +1,125 @@
+Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+
+Variable.UDT.uworkorder.Define("WORK_ORDER",String,WORK_ORDER)
+Variable.UDT.uworkorder.Define("WO_SUFFIX",String,WO_SUFFIX)
+Variable.UDT.uworkorder.Define("WEIGHT",Float)
+Variable.UDT.uworkorder.Define("ROUTER",String)
+Variable.uGlobal.uWorkorder.Declare("uworkorder")
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.ssql.Declare(String)
+V.Local.sbegdate.Declare(String)
+V.Local.senddate.Declare(String)
+V.Local.i.Declare(Long)
+V.Local.i2.Declare(Long)
+
+'This is a custom GAB script that will modify the closed work order report to display weight
+'Date coded: 02/15/2016	
+'Coded by: WAW
+
+'open connection
+F.ODBC.Connection!conX.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+
+'if the 16090 hook fires gather weight information
+F.Intrinsic.Control.If(V.Caller.Hook,=,16090)
+F.Intrinsic.Control.AndIf(V.Passed.CALLING-PGM,=,"JB0121")
+	'display wait dialog
+	F.Intrinsic.UI.InvokeWaitDialog("Generating Report","Please Wait")
+	'get the jobs and suffixes from the BI table
+	F.Intrinsic.String.Build("select WORK_ORDER, WO_SUFFIX from BI_CLOSED_WO where WORK_ORDER <> '{0}'","",V.Local.ssql)
+	F.ODBC.Connection!conX.OpenRecordsetRO("rst",V.Local.ssql)
+	'if end of file is equal to false load the uworkorder udt
+		F.Intrinsic.Control.If(V.ODBC.conX!rst.EOF,<>,True)
+			F.Intrinsic.Variable.LoadUDTFromRecordset("conx","rst","v.uGlobal.uWorkorder",True)
+		F.Intrinsic.Control.EndIf
+		'close connection
+		F.ODBC.conX!rst.Close
+
+	'loop through the workorder UDT and set the parts
+	F.Intrinsic.Control.For(V.Local.i,V.uGlobal.uWorkorder.LBound,V.uGlobal.uWorkorder.UBound,1)
+
+		F.Intrinsic.String.Build("Select ROUTER from V_JOB_HEADER where JOB = '{0}' and SUFFIX = '{1}'",V.uGlobal.uWorkorder(v.Local.i)!WORK_ORDER,V.uGlobal.uWorkorder(v.Local.i)!WO_SUFFIX,V.Local.ssql)
+		F.ODBC.Connection!conX.OpenRecordsetRO("rst",V.Local.ssql)
+		'if end of file is equal to falseset the part in the uworkorder UDT
+		F.Intrinsic.Control.If(V.ODBC.conX!rst.EOF,<>,True)
+			V.uGlobal.uWorkorder(v.Local.i)!ROUTER.Set(V.ODBC.conX!rst.FieldValTrim!ROUTER)
+		F.Intrinsic.Control.EndIf
+		'close connection
+		F.ODBC.conX!rst.Close
+		'get the sum of the weights for that router
+		F.Intrinsic.String.Build("select SUM(ACTUAL_WT)  as WEIGHT from V_ROUTER_LINE where ROUTER = '{0}' and LMO = '{1}'",V.uGlobal.uWorkorder(v.Local.i)!ROUTER,"M",V.Local.ssql)
+		F.ODBC.Connection!conX.OpenRecordsetRO("rst",V.Local.ssql)
+		'if end of file is equal to falseset the total weight for that router
+		F.Intrinsic.Control.If(V.ODBC.conX!rst.EOF,<>,True)
+			V.uGlobal.uWorkorder(v.Local.i)!WEIGHT.Set(V.ODBC.conX!rst.FieldValTrim!WEIGHT)
+		F.Intrinsic.Control.EndIf
+		'close connection
+		F.ODBC.conX!rst.Close
+
+	F.Intrinsic.Control.Next(V.Local.i)
+	
+	'delete everything from the custom table storing this information
+	F.Intrinsic.String.Concat("DELETE FROM ","GCG_3616_Closed_WO",V.Local.ssql)
+	F.ODBC.Connection!conX.Execute(V.Local.ssql)
+	'set udt field references
+	F.Intrinsic.Variable.SetUDTFieldReference(V.uGlobal.uWorkorder!ROUTER,"ROUTER")
+	F.Intrinsic.Variable.SetUDTFieldReference(V.uGlobal.uWorkorder!WEIGHT,"WEIGHT")
+
+	'load the data to the custom table
+	F.ODBC.Connection!conX.OpenRecordsetRW("rst","GCG_3616_Closed_WO")
+	F.Intrinsic.Variable.saveudttorecordset("conx","rst","v.uglobal.uWorkorder")
+	F.ODBC.Conx!rst.Close
+
+	'close the wait dialog
+	F.Intrinsic.UI.CloseWaitDialog
+
+	F.Intrinsic.Control.CallSub(End)
+
+'if not close the program
+F.Intrinsic.Control.Else
+	F.Intrinsic.Control.CallSub(End)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_3616_Closed_WO.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(End)
+Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.Main.End
+
+Program.Sub.End.Start
+F.Intrinsic.Control.SetErrorHandler("End_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+
+'close connection and end the program
+F.ODBC.Connection!conX.Close
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("End_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_3616_Closed_WO.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+	Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.End.End
+
+
